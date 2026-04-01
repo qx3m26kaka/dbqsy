@@ -83,28 +83,45 @@
         toastTimeout = setTimeout(() => toast.classList.remove('show'), 8000);
     }
 
-    // --- 这里由于不能再用油猴的内置请求，改用原生的 fetch 来获取图片 ---
+    // --- 修复点：调用外部传入的油猴上帝权限 API 进行下载 ---
     async function executeZIPDownload() {
         if (cachedImages.size === 0) return;
         const btn = document.getElementById('hk-toast-dl');
         btn.disabled = true;
         
-        const zip = new JSZip(); // 需要确保油猴壳里注入了 JSZip
+        const zip = new JSZip();
         const folder = zip.folder("Doubao_Images");
         const urls = Array.from(cachedImages);
+
+        // 封装上帝权限请求
+        const downloadImage = (url) => new Promise((resolve, reject) => {
+            if (typeof win.Hk_GM_xmlhttpRequest === 'function') {
+                win.Hk_GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: url,
+                    responseType: 'blob',
+                    onload: (res) => {
+                        if (res.status === 200) resolve(res.response);
+                        else reject("Status " + res.status);
+                    },
+                    onerror: (e) => reject(e)
+                });
+            } else {
+                reject("缺少跨域下载权限");
+            }
+        });
 
         for (let i = 0; i < urls.length; i++) {
             btn.innerText = `处理中 ${i + 1}/${urls.length}`;
             try {
-                // 替换掉原先的 GM_xmlhttpRequest，因为云端代码拿不到油猴的特权 API
-                const response = await fetch(urls[i]);
-                const blob = await response.blob();
+                const blob = await downloadImage(urls[i]);
                 folder.file(`Doubao_Raw_${Date.now()}_${i}.png`, blob);
             } catch(e) { console.error("下载失败", e); }
         }
+        
         btn.innerText = "压缩中...";
         const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, `Doubao_Export_${new Date().getTime()}.zip`); // 需要确保壳里注入了 FileSaver
+        saveAs(content, `Doubao_Export_${new Date().getTime()}.zip`);
         
         btn.innerText = "完成";
         setTimeout(() => {
