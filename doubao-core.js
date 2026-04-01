@@ -1,4 +1,3 @@
-// 豆包生图 - 云端核心逻辑 (终极直连版)
 (function(Hk_GM, JSZip_Core) {
     'use strict';
 
@@ -6,15 +5,16 @@
     let toastTimeout = null;
     const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-    // 1. 核心克隆与篡改逻辑
     function replaceUrlsInData(obj) {
         if (!obj || typeof obj !== 'object') return;
         
         if (obj.image && obj.image.image_ori_raw && obj.image.image_ori_raw.url) {
             const rawUrl = obj.image.image_ori_raw.url;
-            // 强行修改克隆对象的所有尺寸链接为原图
             ['image_ori', 'image_preview', 'image_thumb'].forEach(size => {
-                if (obj.image[size]) obj.image[size].url = rawUrl;
+                if (obj.image[size]) {
+                    // 加上 try-catch 防止意外的只读属性报错
+                    try { obj.image[size].url = rawUrl; } catch(e) {}
+                }
             });
 
             if (!cachedImages.has(rawUrl)) {
@@ -22,7 +22,6 @@
                 scheduleToast();
             }
         }
-        // 递归处理
         for (let key in obj) {
             if (Object.prototype.hasOwnProperty.call(obj, key)) {
                 replaceUrlsInData(obj[key]);
@@ -30,21 +29,24 @@
         }
     }
 
-    // 2. 拦截 JSON 解析 (偷梁换柱)
     const originalParse = JSON.parse;
     win.JSON.parse = function(text, reviver) {
         const data = originalParse(text, reviver);
-        try {
-            // 深拷贝一份数据，彻底突破只读限制
-            const editableData = JSON.parse(JSON.stringify(data));
-            replaceUrlsInData(editableData);
-            return editableData;
-        } catch (e) {
-            return data;
+        
+        // 🚀 核心性能优化：只拦截包含原图特征的 JSON 字符串
+        if (typeof text === 'string' && text.includes('image_ori_raw')) {
+            try {
+                const editableData = JSON.parse(JSON.stringify(data));
+                replaceUrlsInData(editableData);
+                return editableData;
+            } catch (e) {
+                return data;
+            }
         }
+        // 无关数据直接放行，0 延迟
+        return data;
     };
 
-    // 3. 初始内存数据扫描 (针对已经加载的数据)
     function scanInitialMemory() {
         try {
             const dataSources = [win._ROUTER_DATA, win._SSR_DATA, win.__NEXT_DATA__];
@@ -52,7 +54,6 @@
         } catch(e) {}
     }
 
-    // 4. UI 弹窗逻辑
     function scheduleToast() {
         clearTimeout(toastTimeout);
         toastTimeout = setTimeout(() => showToast(cachedImages.size), 800);
@@ -90,13 +91,11 @@
         }
     }
 
-    // 5. 终极打包下载逻辑 (调用油猴上帝权限)
     async function executeDownload() {
         if (cachedImages.size === 0) return;
         const btn = document.getElementById('hk-dl-btn');
         btn.disabled = true;
         
-        // 使用从外壳传进来的 JSZip
         const zip = new JSZip_Core();
         const urls = Array.from(cachedImages);
         const folder = zip.folder("Doubao_HD_Images");
@@ -104,7 +103,6 @@
         for (let i = 0; i < urls.length; i++) {
             try {
                 btn.innerText = `下载中 ${i+1}/${urls.length}`;
-                // 使用从外壳传进来的 GM_xmlhttpRequest 强行跨域下载
                 const blob = await new Promise((resolve, reject) => {
                     Hk_GM({
                         method: 'GET',
@@ -138,7 +136,6 @@
         setTimeout(() => { btn.disabled = false; btn.innerText = '一键打包'; }, 3000);
     }
 
-    // 初始化启动
     scanInitialMemory();
 
 })(arguments[0], arguments[1]);
