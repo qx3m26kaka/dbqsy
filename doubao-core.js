@@ -1,152 +1,144 @@
-// 核心逻辑开始 (v1.0.7)
-let cachedImages = new Set();
-let toastTimeout = null;
-const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+// 豆包生图 - 云端核心逻辑 (终极直连版)
+(function(Hk_GM, JSZip_Core) {
+    'use strict';
 
-function replaceUrlsInData(obj) {
-    if (!obj || typeof obj !== 'object') return;
-    if (obj.image && obj.image.image_ori_raw && obj.image.image_ori_raw.url) {
-        const rawUrl = obj.image.image_ori_raw.url;
-        // 关键修复：使用 defineProperty 强制覆盖只读属性
-        const patch = (target) => {
-            if (!target) return;
-            try {
-                Object.defineProperty(target, 'url', {
-                    value: rawUrl, writable: true, configurable: true, enumerable: true
-                });
-            } catch(e) { target.url = rawUrl; }
-        };
-        patch(obj.image.image_ori);
-        patch(obj.image.image_preview);
-        patch(obj.image.image_thumb);
+    let cachedImages = new Set();
+    let toastTimeout = null;
+    const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-        if (!cachedImages.has(rawUrl)) {
-            cachedImages.add(rawUrl);
-            scheduleToast();
-        }
-    }
-    if (Array.isArray(obj)) {
-        for (let i = 0; i < obj.length; i++) replaceUrlsInData(obj[i]);
-    } else {
-        for (let key in obj) {
-            try { replaceUrlsInData(obj[key]); } catch(e) {}
-        }
-    }
-}
-
-const originalParse = JSON.parse;
-win.JSON.parse = function(text, reviver) {
-    let data = originalParse(text, reviver);
-    try {
-        // 深度克隆一份，彻底规避只读限制
-        let clone = JSON.parse(JSON.stringify(data));
-        replaceUrlsInData(clone);
-        return clone;
-    } catch (e) { return data; }
-};
-
-function scanInitialMemory() {
-    const dataSources = [win._ROUTER_DATA, win._SSR_DATA, win.__NEXT_DATA__];
-    dataSources.forEach(source => { if (source) replaceUrlsInData(source); });
-}
-
-let toastDebounceTimer = null;
-function scheduleToast() {
-    clearTimeout(toastDebounceTimer);
-    toastDebounceTimer = setTimeout(() => { showToast(cachedImages.size); }, 800); 
-}
-
-function injectToastStyles() {
-    if (document.getElementById('hk-toast-style')) return;
-    const style = document.createElement('style');
-    style.id = 'hk-toast-style';
-    style.innerText = `
-        #hk-toast { position: fixed; top: 30px; right: -300px; z-index: 2147483647; background: rgba(255, 255, 255, 0.85); backdrop-filter: saturate(180%) blur(20px); border: 1px solid rgba(0,0,0,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-radius: 16px; padding: 16px 20px; display: flex; align-items: center; gap: 15px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; transition: right 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); color: #1d1d1f; font-size: 14px; font-weight: 500; }
-        #hk-toast.show { right: 30px; }
-        .hk-toast-btn { background: #0071e3; color: white; border: none; border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; }
-        .hk-toast-btn:hover { background: #0077ed; }
-        .hk-toast-btn:disabled { background: #a1c6ea; cursor: not-allowed; }
-        .hk-toast-text { display: flex; flex-direction: column; gap: 4px; }
-        .hk-toast-title { font-size: 15px; font-weight: 600; }
-        .hk-toast-sub { font-size: 12px; color: #86868b; }
-    `;
-    document.documentElement.appendChild(style);
-}
-
-function showToast(count) {
-    if (count === 0) return;
-    injectToastStyles();
-    let toast = document.getElementById('hk-toast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'hk-toast';
-        toast.innerHTML = \`
-            <div class="hk-toast-text">
-                <span class="hk-toast-title">✨ 拦截成功 (云端版)</span>
-                <span class="hk-toast-sub" id="hk-toast-count">内存共有 \${count} 张真原图</span>
-            </div>
-            <button class="hk-toast-btn" id="hk-toast-dl">一键打包</button>
-        \`;
-        document.documentElement.appendChild(toast);
-        document.getElementById('hk-toast-dl').addEventListener('click', executeZIPDownload);
-    } else {
-        document.getElementById('hk-toast-count').innerText = \`内存共有 \${count} 张真原图\`;
-    }
-    setTimeout(() => toast.classList.add('show'), 10);
-    clearTimeout(toastTimeout);
-    toastTimeout = setTimeout(() => toast.classList.remove('show'), 8000);
-}
-
-async function executeZIPDownload() {
-    if (cachedImages.size === 0) return;
-    const btn = document.getElementById('hk-toast-dl');
-    btn.disabled = true;
-    
-    const zip = new JSZip();
-    const folder = zip.folder("Doubao_Images");
-    const urls = Array.from(cachedImages);
-
-    const downloadImage = (url) => new Promise((resolve, reject) => {
-        // 关键修复：这里的 GM_xmlhttpRequest 将从外部油猴壳强行注入
-        Hk_GM({
-            method: 'GET',
-            url: url,
-            responseType: 'blob',
-            onload: (res) => {
-                if (res.status === 200) resolve(res.response);
-                else reject("Status " + res.status);
-            },
-            onerror: (e) => reject(e)
-        });
-    });
-
-    for (let i = 0; i < urls.length; i++) {
-        btn.innerText = \`处理中 \${i + 1}/\${urls.length}\`;
-        try {
-            const blob = await downloadImage(urls[i]);
-            folder.file(\`Doubao_Raw_\${Date.now()}_\${i}.png\`, blob);
-        } catch(e) { console.error("下载失败", e); }
-    }
-    
-    btn.innerText = "压缩中...";
-    try {
-        const content = await zip.generateAsync({ type: "blob" });
-        const fileName = \`Doubao_Export_\${Date.now()}.zip\`;
+    // 1. 核心克隆与篡改逻辑
+    function replaceUrlsInData(obj) {
+        if (!obj || typeof obj !== 'object') return;
         
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    } catch (err) { console.error(err); }
-    
-    btn.innerText = "完成";
-    setTimeout(() => {
-        btn.disabled = false; btn.innerText = "一键打包";
-        document.getElementById('hk-toast').classList.remove('show');
-    }, 3000);
-}
+        if (obj.image && obj.image.image_ori_raw && obj.image.image_ori_raw.url) {
+            const rawUrl = obj.image.image_ori_raw.url;
+            // 强行修改克隆对象的所有尺寸链接为原图
+            ['image_ori', 'image_preview', 'image_thumb'].forEach(size => {
+                if (obj.image[size]) obj.image[size].url = rawUrl;
+            });
 
-if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', scanInitialMemory); } 
-else { scanInitialMemory(); }
+            if (!cachedImages.has(rawUrl)) {
+                cachedImages.add(rawUrl);
+                scheduleToast();
+            }
+        }
+        // 递归处理
+        for (let key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                replaceUrlsInData(obj[key]);
+            }
+        }
+    }
+
+    // 2. 拦截 JSON 解析 (偷梁换柱)
+    const originalParse = JSON.parse;
+    win.JSON.parse = function(text, reviver) {
+        const data = originalParse(text, reviver);
+        try {
+            // 深拷贝一份数据，彻底突破只读限制
+            const editableData = JSON.parse(JSON.stringify(data));
+            replaceUrlsInData(editableData);
+            return editableData;
+        } catch (e) {
+            return data;
+        }
+    };
+
+    // 3. 初始内存数据扫描 (针对已经加载的数据)
+    function scanInitialMemory() {
+        try {
+            const dataSources = [win._ROUTER_DATA, win._SSR_DATA, win.__NEXT_DATA__];
+            dataSources.forEach(source => { if (source) replaceUrlsInData(source); });
+        } catch(e) {}
+    }
+
+    // 4. UI 弹窗逻辑
+    function scheduleToast() {
+        clearTimeout(toastTimeout);
+        toastTimeout = setTimeout(() => showToast(cachedImages.size), 800);
+    }
+
+    function showToast(count) {
+        if (count === 0) return;
+        if (!document.getElementById('hk-toast-style')) {
+            const style = document.createElement('style');
+            style.id = 'hk-toast-style';
+            style.innerText = `
+                #hk-toast { position: fixed; top: 30px; right: 30px; z-index: 2147483647; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(0,0,0,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.15); border-radius: 12px; padding: 16px 20px; display: flex; align-items: center; gap: 15px; font-family: system-ui, sans-serif; transition: all 0.3s ease; }
+                .hk-btn { background: #0071e3; color: white; border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; font-weight: 600; font-size: 13px; transition: 0.2s; }
+                .hk-btn:hover { background: #0077ed; }
+                .hk-btn:disabled { background: #a1c6ea; cursor: not-allowed; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        let toast = document.getElementById('hk-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'hk-toast';
+            toast.innerHTML = `
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-weight:600; font-size:15px; color:#1d1d1f;">✨ 拦截成功</span>
+                    <span style="font-size:12px; color:#86868b;" id="hk-toast-text">已捕获 ${count} 张真原图</span>
+                </div>
+                <button class="hk-btn" id="hk-dl-btn">一键打包</button>
+            `;
+            document.body.appendChild(toast);
+            document.getElementById('hk-dl-btn').addEventListener('click', executeDownload);
+        } else {
+            document.getElementById('hk-toast-text').innerText = `已捕获 ${count} 张真原图`;
+        }
+    }
+
+    // 5. 终极打包下载逻辑 (调用油猴上帝权限)
+    async function executeDownload() {
+        if (cachedImages.size === 0) return;
+        const btn = document.getElementById('hk-dl-btn');
+        btn.disabled = true;
+        
+        // 使用从外壳传进来的 JSZip
+        const zip = new JSZip_Core();
+        const urls = Array.from(cachedImages);
+        const folder = zip.folder("Doubao_HD_Images");
+        
+        for (let i = 0; i < urls.length; i++) {
+            try {
+                btn.innerText = `下载中 ${i+1}/${urls.length}`;
+                // 使用从外壳传进来的 GM_xmlhttpRequest 强行跨域下载
+                const blob = await new Promise((resolve, reject) => {
+                    Hk_GM({
+                        method: 'GET',
+                        url: urls[i],
+                        responseType: 'blob',
+                        onload: (res) => { if(res.status === 200) resolve(res.response); else reject(res.status); },
+                        onerror: reject
+                    });
+                });
+                folder.file(`Doubao_RAW_${Date.now()}_${i}.png`, blob);
+            } catch (e) {
+                console.error("单张图片下载失败:", e);
+            }
+        }
+
+        btn.innerText = '压缩中...';
+        try {
+            const content = await zip.generateAsync({ type: 'blob' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `Doubao_Export_${Date.now()}.zip`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        } catch (err) {
+            console.error("压缩失败:", err);
+            alert("压缩打包失败，请查看控制台！");
+        }
+        
+        btn.innerText = '打包完成';
+        setTimeout(() => { btn.disabled = false; btn.innerText = '一键打包'; }, 3000);
+    }
+
+    // 初始化启动
+    scanInitialMemory();
+
+})(arguments[0], arguments[1]);
