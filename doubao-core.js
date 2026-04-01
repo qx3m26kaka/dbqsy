@@ -83,6 +83,7 @@
         toastTimeout = setTimeout(() => toast.classList.remove('show'), 8000);
     }
 
+    // --- 修复点：调用外部传入的油猴上帝权限 API 进行下载 ---
     async function executeZIPDownload() {
         if (cachedImages.size === 0) return;
         const btn = document.getElementById('hk-toast-dl');
@@ -92,31 +93,35 @@
         const folder = zip.folder("Doubao_Images");
         const urls = Array.from(cachedImages);
 
+        // 封装上帝权限请求
         const downloadImage = (url) => new Promise((resolve, reject) => {
-            // 核心修复：直接使用上帝权限 API 进行无视跨域的拉取
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                responseType: 'blob',
-                onload: (res) => {
-                    if (res.status === 200) resolve(res.response);
-                    else reject("Status " + res.status);
-                },
-                onerror: (e) => reject(e)
-            });
+            if (typeof win.Hk_GM_xmlhttpRequest === 'function') {
+                win.Hk_GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: url,
+                    responseType: 'blob',
+                    onload: (res) => {
+                        if (res.status === 200) resolve(res.response);
+                        else reject("Status " + res.status);
+                    },
+                    onerror: (e) => reject(e)
+                });
+            } else {
+                reject("缺少跨域下载权限");
+            }
         });
 
         for (let i = 0; i < urls.length; i++) {
             btn.innerText = `处理中 ${i + 1}/${urls.length}`;
             try {
                 const blob = await downloadImage(urls[i]);
-                folder.file(\`Doubao_Raw_\${Date.now()}_\${i}.png\`, blob);
+                folder.file(`Doubao_Raw_${Date.now()}_${i}.png`, blob);
             } catch(e) { console.error("下载失败", e); }
         }
         
         btn.innerText = "压缩中...";
         const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, \`Doubao_Export_\${new Date().getTime()}.zip\`);
+        saveAs(content, `Doubao_Export_${new Date().getTime()}.zip`);
         
         btn.innerText = "完成";
         setTimeout(() => {
